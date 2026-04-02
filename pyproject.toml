@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+
+[project]
+name = "data-platform-toolkit"
+version = "0.1.0"
+description = "A toolkit for data platform development and management."
+authors = [{ name = "Joaquín C.", email = "joaquin.casanova.c@gmail.com" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = ["Programming Language :: Python :: 3.11"]
+
+dependencies = ["redshift-connector >= 2.1.0 "]
