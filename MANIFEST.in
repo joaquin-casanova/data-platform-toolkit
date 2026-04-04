@@ -1,0 +1,3 @@
+include version.json
+include README.md
+include LICENSE
