@@ -1,15 +1,11 @@
 name: Deploy to AWS CodeArtifact
 
 on:
-  workflow_run:
-    workflows: ["Tagging and Release Notes"]
-    types: [completed]
   push:
     branches: [main]
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -19,8 +15,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && 'development' || github.ref_name }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,33 +32,10 @@ jobs:
       - name: List dist
         run: ls -la dist/
 
-      - name: Determine branch
-        id: extract_branch
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_run" ]; then
-            branch="development"
-          else
-            branch=${GITHUB_REF_NAME}
-          fi
-          echo "branch=${branch}" >> $GITHUB_OUTPUT
-
-      - name: Determine AWS role and domain owner
-        id: determine_role
-        run: |
-          if [[ "${{ steps.extract_branch.outputs.branch }}" == "main" ]]; then
-            echo "AWS_ROLE=${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ROLE_PROD }}" >> $GITHUB_ENV
-            echo "DOMAIN_OWNER=${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ACCOUNT_ID_PROD }}" >> $GITHUB_ENV
-            echo "CODEARTIFACT_REPO=${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_REPO_PROD }}" >> $GITHUB_ENV
-          else
-            echo "AWS_ROLE=${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ROLE_DEV }}" >> $GITHUB_ENV
-            echo "DOMAIN_OWNER=${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ACCOUNT_ID_DEV }}" >> $GITHUB_ENV
-            echo "CODEARTIFACT_REPO=${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_REPO_DEV }}" >> $GITHUB_ENV
-          fi
-
       - name: Assume AWS IAM Role (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.AWS_ROLE }}
+          role-to-assume: ${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ROLE }}
           aws-region: us-west-2
 
       - name: Get version
@@ -77,14 +48,14 @@ jobs:
         run: |
           TOKEN=$(aws codeartifact get-authorization-token \
             --domain ${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_DOMAIN }} \
-            --domain-owner ${{ env.DOMAIN_OWNER }} \
+            --domain-owner ${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ACCOUNT_ID }} \
             --query authorizationToken \
             --output text)
           echo "TOKEN=$TOKEN" >> $GITHUB_ENV
 
       - name: Upload to CodeArtifact
         run: |
-          REPO_URL="https://${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_DOMAIN }}-${{ env.DOMAIN_OWNER }}.d.codeartifact.us-west-2.amazonaws.com/pypi/${{ env.CODEARTIFACT_REPO }}/"
+          REPO_URL="https://${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_DOMAIN }}-${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ACCOUNT_ID }}.d.codeartifact.us-west-2.amazonaws.com/pypi/${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_REPO }}/"
           echo "Publishing to: $REPO_URL"
           for file in dist/*; do
             twine upload \
