@@ -1,9 +1,10 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "data-platform-toolkit"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A toolkit for data platform development and management."
 authors = [{ name = "Joaquín C.", email = "joaquin.casanova.c@gmail.com" }]
 license = { text = "MIT" }
@@ -12,3 +13,10 @@ requires-python = ">=3.11"
 classifiers = ["Programming Language :: Python :: 3.11"]
 
 dependencies = ["redshift-connector >= 2.1.0 "]
+
+[tool.setuptools.dynamic]
+version = {attr = "data_platform_toolkit.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["data_platform_toolkit*"]

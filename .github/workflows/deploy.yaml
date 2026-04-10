@@ -1,0 +1,67 @@
+name: Deploy to AWS CodeArtifact
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: List dist
+        run: ls -la dist/
+
+      - name: Assume AWS IAM Role (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ROLE }}
+          aws-region: us-west-2
+
+      - name: Get version
+        run: |
+          current_version=$(jq -r .version version.json)
+          echo "VERSION=$current_version" >> $GITHUB_ENV
+          echo "Publishing version: $current_version"
+
+      - name: Authenticate to AWS CodeArtifact
+        run: |
+          TOKEN=$(aws codeartifact get-authorization-token \
+            --domain ${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_DOMAIN }} \
+            --domain-owner ${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ACCOUNT_ID }} \
+            --query authorizationToken \
+            --output text)
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Upload to CodeArtifact
+        run: |
+          REPO_URL="https://${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_DOMAIN }}-${{ secrets.DATA_PLATFORM_TOOLKIT_AWS_ACCOUNT_ID }}.d.codeartifact.us-west-2.amazonaws.com/pypi/${{ secrets.DATA_PLATFORM_TOOLKIT_CODEARTIFACT_REPO }}/"
+          echo "Publishing to: $REPO_URL"
+          for file in dist/*; do
+            twine upload \
+              --verbose \
+              --repository-url "$REPO_URL" \
+              --username aws \
+              --password "${{ env.TOKEN }}" \
+              "$file"
+          done

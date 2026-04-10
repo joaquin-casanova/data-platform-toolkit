@@ -1,0 +1,160 @@
+name: Tagging and Release Notes
+
+on:
+  pull_request:
+    branches: [ development ]
+    types: [ closed ]
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  tagging:
+    name: Tagging and Releases
+    # Only run when the PR was actually merged, not just closed
+    if: github.event.pull_request.merged == true
+    strategy:
+      fail-fast: false
+      matrix:
+        semver-version: [3.0.1]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so we can push the version bump commit
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install semver
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install semver==${{ matrix.semver-version }}
+
+      - name: Set up Git identity
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Get commits from merged PR
+        id: get_commits
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            const commitMessages = commits
+              .map(commit => `${commit.commit.message.replace(/\n/g, '\\n')}`)
+              .join('\n');
+            core.setOutput('commits', commitMessages);
+
+      - name: Determine version bump (Conventional Commits)
+        id: determine_version
+        env:
+          ALL_COMMITS: ${{ steps.get_commits.outputs.commits }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          source venv/bin/activate
+          current_version=$(jq -r .version version.json)
+          echo "current_version: $current_version"
+
+          # Conventional Commits: feat! or BREAKING CHANGE → major
+          #                        feat:                    → minor
+          #                        fix:                     → patch
+          #                        anything else            → patch (safe default)
+          if python -c "
+          import re, sys, os
+          msg = os.environ.get('ALL_COMMITS', '')
+          if re.search(r'feat!:|BREAKING CHANGE', msg): sys.exit(0)
+          sys.exit(1)
+          "; then
+            change_type="major"
+          elif python -c "
+          import re, sys, os
+          msg = os.environ.get('ALL_COMMITS', '')
+          if re.search(r'^feat(\(.+\))?:', msg, re.MULTILINE): sys.exit(0)
+          sys.exit(1)
+          "; then
+            change_type="minor"
+          else
+            change_type="patch"
+          fi
+
+          echo "Change type: $change_type"
+
+          case $change_type in
+            "patch") new_version=$(python -c "import semver; print(semver.bump_patch('$current_version'))") ;;
+            "minor") new_version=$(python -c "import semver; print(semver.bump_minor('$current_version'))") ;;
+            "major") new_version=$(python -c "import semver; print(semver.bump_major('$current_version'))") ;;
+          esac
+
+          echo "new_version: $new_version"
+          echo "version=$new_version" >> $GITHUB_OUTPUT
+          echo "{\"version\": \"$new_version\"}" > version.json
+
+      - name: Create Git Tag
+        run: |
+          version=$(jq -r .version version.json)
+          git tag -a "v$version" -m "Release version $version"
+          git push origin "v$version"
+
+      - name: Get current date
+        run: echo "DATE=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2.0.8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "v${{ steps.determine_version.outputs.version }}"
+          name: "v${{ steps.determine_version.outputs.version }}"
+          body: |
+            #### Date: ${{ env.DATE }}
+            ### Changes:
+            ${{ steps.get_commits.outputs.commits }}
+            ### Contributor:
+            - PR Author: ${{ github.event.pull_request.user.login }}
+          draft: false
+          prerelease: false
+
+      - name: Get latest release info
+        id: get_release
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: release } = await github.rest.repos.getLatestRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            core.setOutput("release_body", release.body);
+
+      - name: Commit version bump and release notes
+        env:
+          RELEASE_BODY: ${{ steps.get_release.outputs.release_body }}
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          VERSION=$(jq -r '.version' version.json)
+
+          NEW_RELEASE_SECTION=$(printf "## Latest Changes\n \n### Version %s\n%s\n\n" "$VERSION" "$RELEASE_BODY")
+          { printf "%s" "$NEW_RELEASE_SECTION"; sed -n '/## Latest Changes/,$p' release-notes.md | tail -n +2; } > temp && mv temp release-notes.md
+
+          git add version.json release-notes.md
+          git commit -m "chore: bump version to $VERSION [skip ci]"
+          git push origin HEAD:development
